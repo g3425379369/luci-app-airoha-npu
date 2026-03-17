@@ -376,9 +376,71 @@ set_overclock() {
 		"$target_mhz" "$read_freq" "$read_pcw" "$read_posdiv"
 }
 
+get_frame_engine() {
+	if ! command -v devmem > /dev/null 2>&1; then
+		echo '{"error":"devmem not available"}'
+		return
+	fi
+
+	# PSE queue status (IQ=hi16, OQ=lo16) and drop counts for each port
+	local i reg_q reg_d pse_ports=""
+	for i in 0 1 2 3 4 5 6 7 8 9; do
+		reg_q=$(printf "0x%x" $((0x1fb50150 + i * 4)))
+		reg_d=$(printf "0x%x" $((0x1fb50120 + i * 4)))
+		local qval=$(($(devmem $reg_q)))
+		local dval=$(($(devmem $reg_d)))
+		local iq=$(( (qval >> 16) & 0xFFFF ))
+		local oq=$(( qval & 0xFFFF ))
+		[ -n "$pse_ports" ] && pse_ports="${pse_ports},"
+		pse_ports="${pse_ports}{\"port\":${i},\"iq\":${iq},\"oq\":${oq},\"drops\":${dval}}"
+	done
+
+	# PSE shared buffer
+	local psb=$(($(devmem 0x1fb50104)))
+	local pse_used=$(( (psb >> 16) & 0xFFFF ))
+	local pse_free=$(( psb & 0x7FFF ))
+
+	# GDM counters (TX_OK, TX_DROP, RX_OK, RX_FC_DROP, RX_OVER_DROP)
+	# Read as hex to handle large 32-bit counters
+	local gdm1_tx=$(($(devmem 0x1fb50604)))
+	local gdm1_txd=$(($(devmem 0x1fb50608)))
+	local gdm1_rx=$(($(devmem 0x1fb50648)))
+	local gdm1_rxd=$(($(devmem 0x1fb5064c)))
+
+	local gdm2_tx=$(($(devmem 0x1fb51604)))
+	local gdm2_txd=$(($(devmem 0x1fb51608)))
+	local gdm2_rx=$(($(devmem 0x1fb51648)))
+	local gdm2_rxd=$(($(devmem 0x1fb5164c)))
+
+	local gdm4_tx=$(($(devmem 0x1fb53604)))
+	local gdm4_txd=$(($(devmem 0x1fb53608)))
+	local gdm4_rx=$(($(devmem 0x1fb53648)))
+	local gdm4_rxd=$(($(devmem 0x1fb5364c)))
+
+	# CDM counters (TX_OK, RXCPU_OK, RXHWF_OK, RXCPU_DROP, RXHWF_DROP)
+	local cdm1_tx=$(($(devmem 0x1fb50580)))
+	local cdm1_rxcpu=$(($(devmem 0x1fb50590)))
+	local cdm1_rxhwf=$(($(devmem 0x1fb50594)))
+	local cdm1_rxcpud=$(($(devmem 0x1fb505a0)))
+	local cdm1_rxhwfd=$(($(devmem 0x1fb505a4)))
+
+	local cdm2_tx=$(($(devmem 0x1fb51580)))
+	local cdm2_rxcpu=$(($(devmem 0x1fb51590)))
+	local cdm2_rxhwf=$(($(devmem 0x1fb51594)))
+	local cdm2_rxcpud=$(($(devmem 0x1fb515a0)))
+	local cdm2_rxhwfd=$(($(devmem 0x1fb515a4)))
+
+	printf '{"pse_ports":[%s],"pse_used":%d,"pse_free":%d,' "$pse_ports" "$pse_used" "$pse_free"
+	printf '"gdm1":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm1_tx" "$gdm1_txd" "$gdm1_rx" "$gdm1_rxd"
+	printf '"gdm2":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm2_tx" "$gdm2_txd" "$gdm2_rx" "$gdm2_rxd"
+	printf '"gdm4":{"tx":%d,"tx_drop":%d,"rx":%d,"rx_drop":%d},' "$gdm4_tx" "$gdm4_txd" "$gdm4_rx" "$gdm4_rxd"
+	printf '"cdm1":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d},' "$cdm1_tx" "$cdm1_rxcpu" "$cdm1_rxhwf" "$cdm1_rxcpud" "$cdm1_rxhwfd"
+	printf '"cdm2":{"tx":%d,"rx_cpu":%d,"rx_hwf":%d,"rx_cpu_drop":%d,"rx_hwf_drop":%d}}' "$cdm2_tx" "$cdm2_rxcpu" "$cdm2_rxhwf" "$cdm2_rxcpud" "$cdm2_rxhwfd"
+}
+
 case "$1" in
 	list)
-		echo '{"getStatus":{},"getPpeEntries":{},"getTokenInfo":{},"setGovernor":{"governor":"str"},"setMaxFreq":{"freq":"int"},"setOverclock":{"freq_mhz":"int"}}'
+		echo '{"getStatus":{},"getPpeEntries":{},"getTokenInfo":{},"getFrameEngine":{},"setGovernor":{"governor":"str"},"setMaxFreq":{"freq":"int"},"setOverclock":{"freq_mhz":"int"}}'
 		;;
 	call)
 		case "$2" in
@@ -402,6 +464,9 @@ case "$1" in
 			setOverclock)
 				read input
 				set_overclock "$input"
+				;;
+			getFrameEngine)
+				get_frame_engine
 				;;
 			*)
 				echo '{"error":"Invalid method"}'
